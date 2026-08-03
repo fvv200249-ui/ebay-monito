@@ -1,0 +1,39 @@
+name: eBay Seller Monitor
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run monitor
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python monitor.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "ebay-monitor-bot"
+          git config user.email "actions@github.com"
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > last_run.txt
+          git add seen_items.json last_run.txt
+          git diff --quiet --cached || git commit -m "update state ($(date -u +%Y-%m-%d\ %H:%M))"
+          git push
