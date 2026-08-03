@@ -60,15 +60,20 @@ def matches_filters(title):
 
 
 def load_seen():
+    # Формат файлу: { "item_id": price_float, ... }
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE) as f:
-            return set(json.load(f))
-    return set()
+            data = json.load(f)
+            # підтримка старого формату (список ID без цін)
+            if isinstance(data, list):
+                return {item_id: None for item_id in data}
+            return data
+    return {}
 
 
 def save_seen(seen):
     with open(SEEN_FILE, "w") as f:
-        json.dump(sorted(seen), f)
+        json.dump(seen, f)
 
 
 def send_telegram(text):
@@ -89,19 +94,38 @@ def main():
 
     first_run = not os.path.exists(SEEN_FILE)
     seen = load_seen()
-    new_seen = set(seen)
+    new_seen = dict(seen)
+
     new_items = []
+    price_changes = []
 
     for item in items:
         item_id = item.get("itemId")
         title = item.get("title", "")
-        if not item_id or item_id in seen:
+        if not item_id or not matches_filters(title):
             continue
-        if not matches_filters(title):
-            continue
-        new_seen.add(item_id)
-        if not first_run:
-            new_items.append(item)
+
+        price_info = item.get("price", {})
+        try:
+            price = float(price_info.get("value"))
+        except (TypeError, ValueError):
+            price = None
+
+        if item_id not in seen:
+            # новий лот
+            new_seen[item_id] = price
+            if not first_run:
+                new_items.append(item)
+        else:
+            old_price = seen.get(item_id)
+            new_seen[item_id] = price
+            if (
+                not first_run
+                and old_price is not None
+                and price is not None
+                and price != old_price
+            ):
+                price_changes.append((item, old_price, price))
 
     for item in new_items:
         price = item.get("price", {})
@@ -110,12 +134,27 @@ def main():
         text = f"🆕 {item.get('title')}\n💰 {price_str}\n{url}"
         send_telegram(text)
 
+    for item, old_price, new_price in price_changes:
+        currency = item.get("price", {}).get("currency", "")
+        url = item.get("itemWebUrl", "")
+        icon = "📉" if new_price < old_price else "📈"
+        label = "Знижена ціна" if new_price < old_price else "Підвищена ціна"
+        text = (
+            f"{icon} {label}: {item.get('title')}\n"
+            f"💰 {old_price} → {new_price} {currency}\n"
+            f"{url}"
+        )
+        send_telegram(text)
+
     save_seen(new_seen)
 
     if first_run:
-        print(f"Перший запуск: збережено {len(new_seen)} існуючих лотів як базу, сповіщення не надсилались.")
+        print(f"Перший запуск: збережено {len(new_seen)} існуючих лотів і цін як базу, сповіщення не надсилались.")
     else:
-        print(f"Перевірено {len(items)} лотів, нових {len(new_items)}, надіслано сповіщень {len(new_items)}.")
+        print(
+            f"Перевірено {len(items)} лотів, нових {len(new_items)}, "
+            f"зміна ціни {len(price_changes)}."
+        )
 
 
 if __name__ == "__main__":
