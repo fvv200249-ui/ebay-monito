@@ -16,10 +16,10 @@ CHECK_INTERVAL_SECONDS = 300  # 5 хвилин
 STATE_FILE = "seen_items.json"
 STATE_VERSION = 4  # v4 = безперервний воркер на Railway, "живий знімок" активних лотів
 
-EBAY_CLIENT_ID = os.environ["EBAY_CLIENT_ID"]
-EBAY_CLIENT_SECRET = os.environ["EBAY_CLIENT_SECRET"]
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+EBAY_CLIENT_ID = os.environ.get("EBAY_CLIENT_ID", "")
+EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
 def log(msg):
