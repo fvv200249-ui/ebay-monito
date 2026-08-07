@@ -5,7 +5,9 @@ import datetime
 import requests
 
 # --- Налаштування пошуку (можна міняти під себе) ---
-SELLER = "vipoutlet"
+# ТЕПЕР ТУТ СПИСОК ПРОДАВЦІВ: можете додавати нових через кому, наприклад: ["vipoutlet", "cdrnwx", "інший_продавець"]
+SELLERS = ["vipoutlet", "cdrnwx"] 
+
 CATEGORY_ID = "9355"  # Cell Phones & Smartphones
 KEYWORDS = "iphone"
 MODELS = ["iphone 12", "iphone 13", "iphone 14", "iphone 15"]
@@ -14,7 +16,7 @@ STORAGES = ["128", "256"]  # шукає ці цифри в назві лота (
 CHECK_INTERVAL_SECONDS = 300  # 5 хвилин
 
 STATE_FILE = "seen_items.json"
-STATE_VERSION = 4  # v4 = безперервний воркер на Railway, "живий знімок" активних лотів
+STATE_VERSION = 5  # v5 = Оновили список продавців (робимо тихий перший знімок)
 
 EBAY_CLIENT_ID = os.environ.get("EBAY_CLIENT_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
@@ -47,10 +49,14 @@ def search_items(token):
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     }
+    
+    # Формуємо правильний фільтр для eBay API: {vipoutlet|cdrnwx}
+    sellers_str = "|".join(SELLERS)
+    
     params = {
         "q": KEYWORDS,
         "category_ids": CATEGORY_ID,
-        "filter": f"sellers:{{{SELLER}}}",
+        "filter": f"sellers:{{{sellers_str}}}",
         "sort": "newlyListed",
         "limit": "200",
     }
@@ -74,7 +80,7 @@ def load_state():
     Повертає (previous_active, is_migration).
     is_migration=True -> сповіщення в цьому прогоні не надсилаються,
     лише зберігається чиста база для порівняння надалі
-    (спрацьовує при першому старті контейнера або зміні формату файлу).
+    (спрацьовує при зміні формату файлу чи додаванні продавців).
     """
     if not os.path.exists(STATE_FILE):
         return {}, True
@@ -147,20 +153,26 @@ def run_check():
             if old_price is not None and price is not None and price != old_price:
                 price_changes.append((item, old_price, price))
 
+    # --- Надсилання сповіщень ---
     for item in new_or_restocked:
         price = item.get("price", {})
         price_str = f"{price.get('value', '?')} {price.get('currency', '')}"
         url = item.get("itemWebUrl", "")
-        text = f"🆕 Новий лот / поповнення:\n{item.get('title')}\n💰 {price_str}\n{url}"
+        # Отримуємо нікнейм продавця з API
+        seller_name = item.get("seller", {}).get("username", "Unknown")
+        
+        text = f"🆕 Новий лот (🏪 {seller_name}):\n{item.get('title')}\n💰 {price_str}\n{url}"
         send_telegram(text)
 
     for item, old_price, new_price in price_changes:
         currency = item.get("price", {}).get("currency", "")
         url = item.get("itemWebUrl", "")
+        seller_name = item.get("seller", {}).get("username", "Unknown")
+        
         icon = "📉" if new_price < old_price else "📈"
         label = "Знижена ціна" if new_price < old_price else "Підвищена ціна"
         text = (
-            f"{icon} {label}: {item.get('title')}\n"
+            f"{icon} {label} (🏪 {seller_name}): {item.get('title')}\n"
             f"💰 {old_price} → {new_price} {currency}\n"
             f"{url}"
         )
@@ -169,16 +181,17 @@ def run_check():
     save_state(current_active)
 
     if is_migration:
-        log(f"Оновлення бази: збережено {len(current_active)} активних лотів, сповіщення не надсилались.")
+        log(f"Оновлення бази продавців: збережено {len(current_active)} активних лотів, сповіщення не надсилались.")
     else:
         log(
-            f"Перевірено {len(items)} лотів, нових/поповнених {len(new_or_restocked)}, "
+            f"Перевірено {len(items)} лотів (з {len(SELLERS)} магазинів), нових/поповнених {len(new_or_restocked)}, "
             f"зміна ціни {len(price_changes)}."
         )
 
 
 def main():
-    log("Запуск eBay Monitor на Railway. Перевірка кожні 5 хвилин.")
+    sellers_display = ", ".join(SELLERS)
+    log(f"Запуск eBay Monitor на Railway. Магазини: {sellers_display}. Перевірка кожні 5 хвилин.")
     while True:
         try:
             run_check()
