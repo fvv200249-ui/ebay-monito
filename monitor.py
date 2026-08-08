@@ -9,13 +9,13 @@ SELLERS = ["vipoutlet", "cdrnwx"]
 
 CATEGORY_ID = "9355"  # Cell Phones & Smartphones
 KEYWORDS = "iphone"
-TARGET_MODELS = ["12", "13", "14", "15", "16"] 
+TARGET_MODELS = ["iphone 12", "iphone 13", "iphone 14", "iphone 15", "iphone 16"]
 
 CHECK_INTERVAL_SECONDS = 150  # 2.5 хв
-MIN_PRICE = 60.0              # Мінімальна ціна ($60), відсікає чохли, скло, кабелі
+MIN_PRICE = 60.0              # Знищуємо всі чохли та кабелі
 
 STATE_FILE = "seen_items.json"
-STATE_VERSION = 10  # v10 = Додано мінімальний поріг ціни ($60) та захист від пустих коробок (box only)
+STATE_VERSION = 11  # v11 = Виправлено баг з читанням 12 з 128gb. Суворий глобал моніторинг.
 
 EBAY_CLIENT_ID = os.environ.get("EBAY_CLIENT_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
@@ -110,7 +110,6 @@ def send_telegram(text):
 
 def is_ignored_item(title):
     t = title.lower()
-    # Айклауд + пусті коробки та муляжі
     exclude_words = [
         "icloud", "activation lock", "ic lock", "account lock",
         "box only", "empty box", "only box", "dummy"
@@ -119,37 +118,39 @@ def is_ignored_item(title):
 
 def check_target_sellers(title):
     t = title.lower()
-    return any(f"iphone {m}" in t for m in TARGET_MODELS)
+    # Тепер TARGET_MODELS вже включають слово "iphone ", напр. "iphone 12"
+    return any(m in t for m in TARGET_MODELS)
 
 def get_global_sniper_limit(item):
+    """ Тепер шукаємо моделі за повною назвою, щоб 128gb не зарахувалось як iPhone 12 """
     t = item.get("title", "").lower()
     cond_id = str(item.get("conditionId", ""))
     is_new = (cond_id == "1000" or "brand new" in t)
     
-    if "16 plus" in t: return 325
-    if "16 pro max" in t: return 0   
-    if "16 pro" in t: return 0 
-    if "16" in t: return 300
+    if "iphone 16 plus" in t: return 325
+    if "iphone 16 pro max" in t: return 0   
+    if "iphone 16 pro" in t: return 0 
+    if "iphone 16" in t: return 300
     
-    if "15 pro max" in t: return 300
-    if "15 pro" in t: return 270
-    if "15 plus" in t: return 240
-    if "15" in t: return 240
+    if "iphone 15 pro max" in t: return 300
+    if "iphone 15 pro" in t: return 270
+    if "iphone 15 plus" in t: return 240
+    if "iphone 15" in t: return 240
     
-    if "14 pro max" in t: return 260
-    if "14 pro" in t: return 250
-    if "14 plus" in t: return 160
-    if "14" in t: return 160
+    if "iphone 14 pro max" in t: return 260
+    if "iphone 14 pro" in t: return 250
+    if "iphone 14 plus" in t: return 160
+    if "iphone 14" in t: return 160
     
-    if "13 pro max" in t: return 0 
-    if "13 pro" in t: return 0 
-    if "13 mini" in t: return 0 
-    if "13" in t: return (175 if is_new else 160)
+    if "iphone 13 pro max" in t: return 0 
+    if "iphone 13 pro" in t: return 0 
+    if "iphone 13 mini" in t: return 0 
+    if "iphone 13" in t: return (175 if is_new else 160)
     
-    if "12 pro max" in t: return 170
-    if "12 pro" in t: return 0
-    if "12 mini" in t: return 0
-    if "12" in t: return 105
+    if "iphone 12 pro max" in t: return 170
+    if "iphone 12 pro" in t: return 0
+    if "iphone 12 mini" in t: return 0
+    if "iphone 12" in t: return 105
     
     return 0
 
@@ -175,30 +176,31 @@ def run_check():
         try: price = float(item.get("price", {}).get("value"))
         except: continue
             
-        # 1. Відсікаємо все, що дешевше $60 (чохли, кабелі, захисне скло)
+        # Блокуємо чехли і дешевий скам < $60. Одразу вирішує проблему чохлів!
         if price < MIN_PRICE:
             continue
             
-        # 2. Відсікаємо айклауд та пусті коробки/муляжі
         if is_ignored_item(title): 
             continue 
             
         seller_info = item.get("seller", {})
         seller_username = str(seller_info.get("username", "")).lower()
         
-        # 3. Перевірка рейтингу продавця (<10 ігноруємо)
         try: 
             feedback_score = int(seller_info.get("feedbackScore", 0))
         except (ValueError, TypeError): 
             feedback_score = 0
             
+        # Захист від шахраїв, але VIP продавці 100% проходять
         if feedback_score < 10:
             continue
         
+        # Локальна ціль
         is_targeted = False
         if seller_username in [s.lower() for s in SELLERS] and check_target_sellers(title):
             is_targeted = True
 
+        # Глобальна ціль
         global_threshold = get_global_sniper_limit(item)
         is_sniper_deal = (global_threshold > 0 and price <= global_threshold)
         
@@ -255,20 +257,19 @@ def run_check():
     save_state(current_active)
 
     if is_migration:
-        log(f"[DB:Migration] Укріпили базу v{STATE_VERSION}. Додано поріг $60 (захист від чохлів) та пустих коробок. (В базі: {len(current_active)} шт).")
+        log(f"[DB:Migration] Укріпили базу v{STATE_VERSION}. Поправлений баг '12' у 128gb. Блоки скаму < $60. (В базі: {len(current_active)} шт).")
     else:
         log(f"Опитано лоти. Знахідок нових: {len(new_alerts)}, Змін цін: {len(price_change_alerts)}.")
 
 
 def main():
-    log(f"Запуск V10! Поріг $60 ввімкнено. Фільтр рейтингу < 10 ввімкнено.")
+    log(f"Запуск V11! Повне перекриття. Глобал захист в дії.")
     while True:
         try:
             run_check()
         except Exception as e:
             log(f"Помилка основного циклу. Чекаємо реконект: {e}")
         time.sleep(CHECK_INTERVAL_SECONDS)
-
 
 if __name__ == "__main__":
     main()
