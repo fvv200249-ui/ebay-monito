@@ -12,9 +12,10 @@ KEYWORDS = "iphone"
 TARGET_MODELS = ["12", "13", "14", "15", "16"] 
 
 CHECK_INTERVAL_SECONDS = 150  # 2.5 хв
+MIN_PRICE = 60.0              # Мінімальна ціна ($60), відсікає чохли, скло, кабелі
 
 STATE_FILE = "seen_items.json"
-STATE_VERSION = 9  # v9 = Видалив BinConfirm, додав фільтр відгуків продавців (< 10), додав відсоток в ТГ
+STATE_VERSION = 10  # v10 = Додано мінімальний поріг ціни ($60) та захист від пустих коробок (box only)
 
 EBAY_CLIENT_ID = os.environ.get("EBAY_CLIENT_ID", "")
 EBAY_CLIENT_SECRET = os.environ.get("EBAY_CLIENT_SECRET", "")
@@ -107,9 +108,13 @@ def send_telegram(text):
 
 # -------------------- БЛОКИ ПЕРЕВІРКИ АЙФОНІВ ТА МАТЕМАТИКА --------------------
 
-def is_icloud_locked(title):
+def is_ignored_item(title):
     t = title.lower()
-    exclude_words = ["icloud", "activation lock", "ic lock", "account lock"]
+    # Айклауд + пусті коробки та муляжі
+    exclude_words = [
+        "icloud", "activation lock", "ic lock", "account lock",
+        "box only", "empty box", "only box", "dummy"
+    ]
     return any(w in t for w in exclude_words)
 
 def check_target_sellers(title):
@@ -170,13 +175,18 @@ def run_check():
         try: price = float(item.get("price", {}).get("value"))
         except: continue
             
-        if is_icloud_locked(title): 
+        # 1. Відсікаємо все, що дешевше $60 (чохли, кабелі, захисне скло)
+        if price < MIN_PRICE:
+            continue
+            
+        # 2. Відсікаємо айклауд та пусті коробки/муляжі
+        if is_ignored_item(title): 
             continue 
             
         seller_info = item.get("seller", {})
         seller_username = str(seller_info.get("username", "")).lower()
         
-        # Перевірка рейтингу продавця (ФІЛЬТР ШАХРАЇВ)
+        # 3. Перевірка рейтингу продавця (<10 ігноруємо)
         try: 
             feedback_score = int(seller_info.get("feedbackScore", 0))
         except (ValueError, TypeError): 
@@ -212,7 +222,6 @@ def run_check():
         elif price != old_price:
             price_change_alerts.append( (item, old_price, price, alert_header, feedback_score) )
 
-    # ОПОВІЩЕННЯ ТЕЛЕГРАМ (Без небезпечних чекаутів!)
     for item, header, f_score in new_alerts:
         p_val = item.get("price", {}).get("value", "?")
         cur = item.get("price", {}).get("currency", "")
@@ -246,13 +255,13 @@ def run_check():
     save_state(current_active)
 
     if is_migration:
-        log(f"[DB:Migration] Укріпили базу v{STATE_VERSION}. Впроваджено фільтр антишахраїв. (Спостерігаємо: {len(current_active)} шт).")
+        log(f"[DB:Migration] Укріпили базу v{STATE_VERSION}. Додано поріг $60 (захист від чохлів) та пустих коробок. (В базі: {len(current_active)} шт).")
     else:
         log(f"Опитано лоти. Знахідок нових: {len(new_alerts)}, Змін цін: {len(price_change_alerts)}.")
 
 
 def main():
-    log(f"Запуск V9! BinConfirm викинуто. Фільтр рейтингу < 10 ввімкнено. Безпечний сніпінг.")
+    log(f"Запуск V10! Поріг $60 ввімкнено. Фільтр рейтингу < 10 ввімкнено.")
     while True:
         try:
             run_check()
